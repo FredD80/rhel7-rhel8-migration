@@ -16,14 +16,16 @@ Configure these as required AAP survey variables or provide them as CLI extra va
 | `rhel7_source_host` | Inventory host or group for the RHEL 7 source | `app01-rhel7` |
 | `artifact_bucket` | S3 bucket for audit and manifest artifacts | `my-migration-artifacts` |
 | `aws_region` | AWS region for S3 and AWS metadata capture | `us-east-1` |
-| `cutover_strategy` | Production identity transfer strategy | `dns` |
+| `cutover_strategies` | Requested production identity transfer strategies, comma-separated | `dns` |
 
-Allowed `cutover_strategy` values:
+Allowed `cutover_strategies` values:
 
 - `dns`
 - `eip`
 - `lb`
 - `secondary_ip`
+
+DNS is always included. During AWS capture, if the RHEL 7 source instance has an Elastic IP attached, the audit playbook automatically adds `eip` to the effective cutover strategies so both DNS and EIP are represented in the proposed manifest.
 
 CLI example:
 
@@ -33,5 +35,5 @@ ansible-playbook playbooks/audit/discover-migration-manifest.yml \
   -e rhel7_source_host=app01-rhel7 \
   -e artifact_bucket=my-migration-artifacts \
   -e aws_region=us-east-1 \
-  -e cutover_strategy=dns
+  -e cutover_strategies=dns
 ```

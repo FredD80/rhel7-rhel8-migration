@@ -19,7 +19,7 @@ The following decisions are mandatory for this migration model.
 7. Every workflow is short-lived and independently launched. No AAP workflow waits across the multi-week parallel phase.
 8. Cutover is gated by a recent passing pre-cutover validation artifact and the exact git commit SHA that produced it.
 9. Rollback semantics must be accepted by the application owner before technical work begins.
-10. DNS cutover is the default production identity transfer strategy. EIP reassociation, load balancer target swap, or secondary private IP reassignment require an explicit approved exception in the manifest.
+10. DNS is always included in the production identity transfer plan. If the source has an Elastic IP attached, EIP reassociation is also required. Load balancer target swap or secondary private IP reassignment require an explicit approved exception in the manifest.
 11. Primary ENI movement is not a supported cutover strategy.
 
 ## 3. Control Plane
@@ -171,7 +171,8 @@ host_policy:
   crypto_policy: "DEFAULT" # DEFAULT or FIPS
   selinux_required_state: "enforcing"
 cutover:
-  strategy: "dns" # dns is default; eip, lb, or secondary_ip require approved exception
+  strategies:
+    - dns # dns is always included
   dns:
     hosted_zone_id: ""
     record_name: ""
@@ -180,6 +181,10 @@ cutover:
     target_value: ""
     pre_cutover_ttl: 60
     restore_ttl: 300
+  eip:
+    allocation_id: ""
+    association_id: ""
+    public_ip: ""
   ttl_restore_required: true
 rollback:
   window_hours: 0
@@ -445,7 +450,7 @@ Steps:
 2. Identify source instance ID, hostname, AZ, VPC, subnet, IAM role, security groups, and KMS keys.
 3. Confirm target RHEL 8 must be created in the same AZ.
 4. Select provisioning method: manual or Terraform.
-5. Select DNS cutover unless an exception is approved for EIP, LB target swap, or secondary private IP.
+5. Include DNS in the cutover plan. The audit adds EIP when the source has an Elastic IP attached. LB target swap or secondary private IP requires an approved manifest exception.
 6. Confirm primary ENI move is not being used.
 7. Decide FIPS requirement before build.
 8. If FIPS is required, confirm the build process enables FIPS before workload configuration and key generation.
@@ -460,7 +465,7 @@ Steps:
 17. Schedule maintenance window.
 18. Define success criteria.
 19. Define rollback triggers.
-20. Lower DNS TTL to 60-300 seconds before cutover when DNS is the cutover strategy.
+20. Lower DNS TTL to 60-300 seconds before cutover when DNS is included in the cutover strategies.
 21. Record DNS TTL restoration requirement for Phase 9 when DNS TTL was lowered.
 
 Output when snapshots are created:
@@ -651,7 +656,7 @@ Capture:
 3. hostname and reverse-DNS expectations
 4. upstream and downstream application dependencies, ports, protocols, and owners
 5. load balancer health-check path, port, and expected response when load balancer cutover is used
-6. Route 53 records, EIP allocation, or secondary private IP details for the selected cutover strategy
+6. Route 53 records, EIP allocation, or secondary private IP details for the selected cutover strategies
 7. outbound firewall or proxy requirements
 8. local hosts-file dependencies
 9. application allowlists that reference source IP, hostname, certificate subject, or SSH host key
@@ -669,7 +674,7 @@ Capture:
 7. attached EBS volumes with size, type, IOPS, throughput, encryption, KMS key, attachment name, delete-on-termination flag
 8. LVM mapping to EBS volumes
 9. relevant agent registration state when agents must be re-identified on RHEL 8
-10. relevant Route 53 records, EIP allocations, or load balancer target group memberships depending on cutover strategy
+10. relevant Route 53 records, EIP allocations, or load balancer target group memberships depending on cutover strategies
 11. KMS keys required for the root volume, data volumes, and any application volume operations
 
 ### 11.10 Proposed Manifest Derivation
@@ -685,7 +690,7 @@ The audit playbook must generate a proposed manifest containing:
 7. repository and GPG fingerprint candidates for approval
 8. services, ports, dependencies, service-account mappings, and startup order
 9. security settings needed on RHEL 8
-10. cutover strategy inputs
+10. cutover strategy inputs, including every detected production identity move
 11. rollback RPO statement and rollback blockers
 12. unresolved conflicts, unknowns, and hard blockers
 
@@ -990,12 +995,14 @@ Fail if any check fails.
 22. Update agent identities where required.
 23. Start application services on RHEL 8 in dependency order.
 24. Run immediate smoke checks.
-25. Execute production identity transfer based on `cutover.strategy`.
+25. Execute production identity transfer based on `cutover.strategies`.
 26. Coordinate firewall or security group updates that reference the old IP.
 27. Re-enable monitoring if it was paused.
 28. Launch post-cutover validation.
 
 ### 15.3 Production Identity Transfer
+
+Run every strategy listed in `cutover.strategies`. If both `eip` and `dns` are present, move and verify the EIP first, then update or verify DNS.
 
 DNS:
 
@@ -1094,11 +1101,11 @@ Before rollback:
 8. Mount volumes on RHEL 7.
 9. Start RHEL 7.
 10. Start services on RHEL 7.
-11. Restore production identity based on original cutover strategy.
+11. Restore production identity based on original cutover strategies.
 12. Validate service health.
 13. Upload rollback report.
 
-Rollback identity transfer must branch by strategy:
+Rollback identity transfer must branch by strategy and reverse every production identity move that was completed:
 
 - DNS: point DNS back to RHEL 7 private IP
 - EIP: move EIP back to RHEL 7

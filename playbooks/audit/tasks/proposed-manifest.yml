@@ -1,4 +1,4 @@
 ---
 - name: Not implemented - proposed manifest generation
   ansible.builtin.fail:
-    msg: "TODO: generate the proposed migration manifest from sanitized audit inputs per specification section 11.10."
+    msg: "TODO: generate the proposed migration manifest from sanitized audit inputs, including audit_context.effective_cutover_strategies and detected EIP details, per specification section 11.10."
