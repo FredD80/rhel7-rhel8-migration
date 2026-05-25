@@ -1,8 +1,77 @@
 ---
 - name: Discover RHEL 7 migration manifest inputs
-  hosts: rhel7_sources
+  hosts: "{{ rhel7_source_host }}"
   become: true
   gather_facts: true
+  vars_prompt:
+    - name: migration_id
+      prompt: "Migration ID"
+      private: false
+
+    - name: rhel7_source_host
+      prompt: "RHEL 7 source inventory host or group"
+      private: false
+
+    - name: artifact_bucket
+      prompt: "S3 artifact bucket name"
+      private: false
+
+    - name: aws_region
+      prompt: "AWS region"
+      private: false
+
+    - name: cutover_strategy
+      prompt: "Cutover strategy (dns, eip, lb, secondary_ip)"
+      private: false
+      default: "dns"
+
+  vars:
+    allowed_cutover_strategies:
+      - dns
+      - eip
+      - lb
+      - secondary_ip
+
+  pre_tasks:
+    - name: Validate mandatory audit inputs
+      ansible.builtin.assert:
+        that:
+          - migration_id is defined
+          - rhel7_source_host is defined
+          - artifact_bucket is defined
+          - aws_region is defined
+          - cutover_strategy is defined
+          - migration_id | trim | length > 0
+          - rhel7_source_host | trim | length > 0
+          - artifact_bucket | trim | length > 0
+          - aws_region | trim | length > 0
+          - (cutover_strategy | trim | lower) in allowed_cutover_strategies
+          - "'/' not in migration_id"
+          - "' ' not in migration_id"
+          - "'/' not in artifact_bucket"
+        fail_msg: "Required audit inputs: migration_id, rhel7_source_host, artifact_bucket, aws_region, and cutover_strategy."
+
+    - name: Set audit artifact context
+      ansible.builtin.set_fact:
+        audit_context:
+          migration_id: "{{ migration_id | trim }}"
+          rhel7_source_host: "{{ rhel7_source_host | trim }}"
+          artifact_bucket: "{{ artifact_bucket | trim }}"
+          aws_region: "{{ aws_region | trim }}"
+          cutover_strategy: "{{ cutover_strategy | trim | lower }}"
+          s3_base_prefix: "rhel-migration/{{ migration_id | trim }}"
+          sanitized_audit_key: "rhel-migration/{{ migration_id | trim }}/phase-2-audit/sanitized"
+          proposed_manifest_key: "rhel-migration/{{ migration_id | trim }}/manifest/proposed"
+
+    - name: Show audit artifact destination
+      ansible.builtin.debug:
+        msg:
+          - "Migration ID: {{ audit_context.migration_id }}"
+          - "Source host pattern: {{ audit_context.rhel7_source_host }}"
+          - "S3 artifact location: s3://{{ audit_context.artifact_bucket }}/{{ audit_context.s3_base_prefix }}/"
+          - "AWS region: {{ audit_context.aws_region }}"
+          - "Cutover strategy: {{ audit_context.cutover_strategy }}"
+
   tasks:
     - name: Capture host and OS baseline
       ansible.builtin.import_tasks: tasks/host-os-baseline.yml
