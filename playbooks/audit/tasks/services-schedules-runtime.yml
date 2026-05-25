@@ -1,0 +1,4 @@
+---
+- name: Not implemented - services, schedules, and runtime audit
+  ansible.builtin.fail:
+    msg: "TODO: implement systemd, SysV, cron, timers, process, port, and agent capture from specification section 11.4."

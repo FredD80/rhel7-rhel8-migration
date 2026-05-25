@@ -1,0 +1,9 @@
+---
+- name: Sync approved root-volume content
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - root content rsync
+      ansible.builtin.fail:
+        msg: "TODO: implement manifest-approved root content rsync."

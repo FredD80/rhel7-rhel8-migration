@@ -1,0 +1,8 @@
+---
+- name: Validate pre-cutover AWS readiness
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - AWS readiness validation
+      ansible.builtin.fail:
+        msg: "TODO: validate AWS permissions, KMS access, volume mapping, and cutover-strategy readiness."

@@ -1,0 +1,8 @@
+---
+- name: Move data volumes from RHEL 7 to RHEL 8
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - data-volume cutover
+      ansible.builtin.fail:
+        msg: "TODO: unmount, snapshot, detach, attach, discover, activate, mount, and validate data volumes."

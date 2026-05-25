@@ -1,0 +1,9 @@
+---
+- name: Validate outbound connectivity
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - outbound connectivity validation
+      ansible.builtin.fail:
+        msg: "TODO: validate outbound dependencies, proxies, DNS, TLS, SSH, and firewall path."

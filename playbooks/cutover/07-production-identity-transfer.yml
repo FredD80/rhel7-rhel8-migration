@@ -1,0 +1,8 @@
+---
+- name: Transfer production identity
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - production identity transfer
+      ansible.builtin.fail:
+        msg: "TODO: implement DNS, EIP, load balancer, or secondary private IP transfer based on cutover.strategy."

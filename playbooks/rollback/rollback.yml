@@ -1,0 +1,8 @@
+---
+- name: Roll back migration
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - rollback workflow
+      ansible.builtin.fail:
+        msg: "TODO: implement rollback sequence from the migration specification."

@@ -1,0 +1,8 @@
+---
+- name: Decommission RHEL 7 source
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - decommission workflow
+      ansible.builtin.fail:
+        msg: "TODO: tear down migration access, cleanup temporary resources, terminate RHEL 7, and upload decommission report."

@@ -1,0 +1,9 @@
+---
+- name: Validate downstream consumer connectivity
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - consumer connectivity validation
+      ansible.builtin.fail:
+        msg: "TODO: validate representative downstream consumers and dependencies."

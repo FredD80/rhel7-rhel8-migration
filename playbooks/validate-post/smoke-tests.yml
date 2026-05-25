@@ -1,0 +1,9 @@
+---
+- name: Run post-cutover smoke tests
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - smoke tests
+      ansible.builtin.fail:
+        msg: "TODO: implement application smoke tests."

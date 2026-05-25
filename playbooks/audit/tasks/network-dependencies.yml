@@ -1,0 +1,4 @@
+---
+- name: Not implemented - network dependency audit
+  ansible.builtin.fail:
+    msg: "TODO: implement interface, route, DNS, dependency, proxy, local hosts, and cutover network capture from specification section 11.8."

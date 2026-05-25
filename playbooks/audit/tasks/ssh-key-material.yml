@@ -1,0 +1,4 @@
+---
+- name: Not implemented - SSH key material and trust audit
+  ansible.builtin.fail:
+    msg: "TODO: implement SSH host key, authorized key, known-host, SSH CA, private-key metadata, and SSH dependency capture from specification section 11.7."

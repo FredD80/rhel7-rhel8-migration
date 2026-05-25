@@ -1,0 +1,4 @@
+---
+- name: Not implemented - filesystem and application path audit
+  ansible.builtin.fail:
+    msg: "TODO: implement filesystem, root-sync candidates, file metadata, package ownership, and application path capture from specification section 11.5."

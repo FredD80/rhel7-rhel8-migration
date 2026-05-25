@@ -1,0 +1,4 @@
+---
+- name: Not implemented - security settings audit
+  ansible.builtin.fail:
+    msg: "TODO: implement SELinux, FIPS, crypto, auth, sudo, firewall, auditd, and certificate metadata capture from specification section 11.6."

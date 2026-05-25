@@ -1,0 +1,8 @@
+---
+- name: Snapshot migration volumes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - volume snapshots
+      ansible.builtin.fail:
+        msg: "TODO: implement data-volume snapshot creation and snapshot report upload."

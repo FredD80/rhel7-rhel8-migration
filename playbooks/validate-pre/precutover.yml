@@ -1,0 +1,9 @@
+---
+- name: Run pre-cutover validation
+  hosts: rhel8_targets
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Not implemented - pre-cutover validation
+      ansible.builtin.fail:
+        msg: "TODO: implement final pre-cutover validation and report generation."

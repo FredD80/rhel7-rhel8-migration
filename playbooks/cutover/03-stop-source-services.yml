@@ -1,0 +1,9 @@
+---
+- name: Stop source services
+  hosts: rhel7_sources
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - stop source services
+      ansible.builtin.fail:
+        msg: "TODO: stop RHEL 7 application services in manifest dependency order."

@@ -1,0 +1,9 @@
+---
+- name: Setup ephemeral rsync SSH channel
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - rsync SSH channel setup
+      ansible.builtin.fail:
+        msg: "TODO: implement ephemeral SSH key setup and source host-key verification."

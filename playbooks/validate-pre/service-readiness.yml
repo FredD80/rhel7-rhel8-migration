@@ -1,0 +1,9 @@
+---
+- name: Validate pre-cutover service readiness
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - service readiness validation
+      ansible.builtin.fail:
+        msg: "TODO: validate service startup, logs, readiness, dependencies, and staging identity checks."

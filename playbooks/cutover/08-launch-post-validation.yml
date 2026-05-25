@@ -1,0 +1,8 @@
+---
+- name: Launch post-cutover validation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - launch post-cutover validation
+      ansible.builtin.fail:
+        msg: "TODO: launch or call post-cutover validation workflow."

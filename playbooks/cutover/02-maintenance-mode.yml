@@ -1,0 +1,8 @@
+---
+- name: Enter maintenance mode
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - maintenance mode
+      ansible.builtin.fail:
+        msg: "TODO: pause monitoring alerts when configured and record maintenance-window entry."

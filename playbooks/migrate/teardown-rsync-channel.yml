@@ -1,0 +1,9 @@
+---
+- name: Teardown ephemeral rsync SSH channel
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - rsync SSH channel teardown
+      ansible.builtin.fail:
+        msg: "TODO: remove migration SSH keys, authorized-key entries, and temporary known-host entries."

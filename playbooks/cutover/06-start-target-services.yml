@@ -1,0 +1,9 @@
+---
+- name: Start target services
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - start target services
+      ansible.builtin.fail:
+        msg: "TODO: set production hostname, update required agent identities, start RHEL 8 services, and run immediate smoke checks."

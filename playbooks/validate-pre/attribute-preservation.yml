@@ -1,0 +1,9 @@
+---
+- name: Validate pre-cutover attribute preservation
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - attribute preservation validation
+      ansible.builtin.fail:
+        msg: "TODO: validate modes, UID/GID, SELinux context, ACLs, xattrs, setuid/setgid, and file capabilities."

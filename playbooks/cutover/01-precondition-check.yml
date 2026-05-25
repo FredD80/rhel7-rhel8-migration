@@ -1,0 +1,8 @@
+---
+- name: Cutover precondition check
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - cutover precondition check
+      ansible.builtin.fail:
+        msg: "TODO: verify validation freshness, manifest version, checksum, git SHA, execution environment digest, rsync schedule, and maintenance window."

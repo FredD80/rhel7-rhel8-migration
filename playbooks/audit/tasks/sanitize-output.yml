@@ -1,0 +1,4 @@
+---
+- name: Not implemented - audit output sanitization
+  ansible.builtin.fail:
+    msg: "TODO: sanitize audit output and prevent secret material from being copied to S3 per specification sections 11.11 and 11.12."

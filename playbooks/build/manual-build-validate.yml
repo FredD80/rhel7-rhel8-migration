@@ -1,0 +1,9 @@
+---
+- name: Validate manually built RHEL 8 target
+  hosts: rhel8_targets
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Not implemented - manual build validation
+      ansible.builtin.fail:
+        msg: "TODO: implement Phase 3 build validation from the migration specification."

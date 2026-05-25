@@ -1,0 +1,9 @@
+---
+- name: Validate pre-cutover data completeness
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - data completeness validation
+      ansible.builtin.fail:
+        msg: "TODO: validate file counts, sizes, checksums, ownership, ACLs, xattrs, and capabilities."

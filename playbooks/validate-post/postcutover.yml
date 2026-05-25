@@ -1,0 +1,9 @@
+---
+- name: Run post-cutover validation
+  hosts: rhel8_targets
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Not implemented - post-cutover validation
+      ansible.builtin.fail:
+        msg: "TODO: implement production endpoint, service, agent, volume, log, and success-criteria validation."

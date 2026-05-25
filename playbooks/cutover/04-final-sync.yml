@@ -1,0 +1,9 @@
+---
+- name: Run final root-content sync
+  hosts: rhel8_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Not implemented - final sync
+      ansible.builtin.fail:
+        msg: "TODO: run final root-content rsync delta and application-aware final dumps when required by the manifest."

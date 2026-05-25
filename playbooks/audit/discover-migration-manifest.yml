@@ -1,0 +1,35 @@
+---
+- name: Discover RHEL 7 migration manifest inputs
+  hosts: rhel7_sources
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Capture host and OS baseline
+      ansible.builtin.import_tasks: tasks/host-os-baseline.yml
+
+    - name: Capture users, groups, and service accounts
+      ansible.builtin.import_tasks: tasks/users-groups-service-accounts.yml
+
+    - name: Capture services, schedules, and runtime state
+      ansible.builtin.import_tasks: tasks/services-schedules-runtime.yml
+
+    - name: Capture filesystem and application paths
+      ansible.builtin.import_tasks: tasks/filesystem-application-paths.yml
+
+    - name: Capture security settings
+      ansible.builtin.import_tasks: tasks/security-settings.yml
+
+    - name: Capture SSH key material safely
+      ansible.builtin.import_tasks: tasks/ssh-key-material.yml
+
+    - name: Capture network dependencies
+      ansible.builtin.import_tasks: tasks/network-dependencies.yml
+
+    - name: Capture AWS metadata
+      ansible.builtin.import_tasks: tasks/aws-captures.yml
+
+    - name: Build proposed manifest
+      ansible.builtin.import_tasks: tasks/proposed-manifest.yml
+
+    - name: Sanitize audit output
+      ansible.builtin.import_tasks: tasks/sanitize-output.yml

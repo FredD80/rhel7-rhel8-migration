@@ -1,0 +1,4 @@
+---
+- name: Not implemented - host and OS baseline audit
+  ansible.builtin.fail:
+    msg: "TODO: implement host and OS baseline capture from specification section 11.2."

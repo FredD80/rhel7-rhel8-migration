@@ -1,0 +1,9 @@
+---
+- name: Build RHEL 8 target
+  hosts: rhel8_targets
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Not implemented - RHEL 8 build
+      ansible.builtin.fail:
+        msg: "TODO: implement Phase 3 RHEL 8 build steps from the migration specification."

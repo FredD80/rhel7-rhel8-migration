@@ -1,0 +1,8 @@
+---
+- name: Load and validate approved migration manifest
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Not implemented - load and validate manifest
+      ansible.builtin.fail:
+        msg: "TODO: implement approved manifest download, checksum, version, and schema validation."
