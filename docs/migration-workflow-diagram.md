@@ -34,13 +34,15 @@ flowchart TD
 │   ├── audit/
 │   │   └── tasks/
 │   ├── build/
-│   ├── cutover/
-│   ├── decommission/
 │   ├── migrate/
-│   ├── rollback/
-│   ├── validate-post/
 │   ├── validate-pre/
-│   └── validate-shared/
+│   ├── cutover/
+│   ├── validate-post/
+│   ├── validate-shared/
+│   ├── rollback/
+│   └── decommission/
 ├── roles/
 └── schemas/
 ```
+
+Playbook directories are shown in migration workflow order, not alphabetical order. `decommission/` is Phase 9 and runs last, after the rollback window closes.
