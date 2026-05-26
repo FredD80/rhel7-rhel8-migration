@@ -1,4 +1,45 @@
 ---
-- name: Not implemented - network dependency audit
-  ansible.builtin.fail:
-    msg: "TODO: implement interface, route, DNS, dependency, proxy, local hosts, and cutover network capture from specification section 11.8."
+- name: Capture network and dependency commands
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: ip_addr
+      command: ip addr show
+    - key: ip_route
+      command: ip route show table all
+    - key: ip_rule
+      command: ip rule show
+    - key: resolv_conf
+      command: cat /etc/resolv.conf
+    - key: hosts_file
+      command: cat /etc/hosts
+    - key: nsswitch
+      command: cat /etc/nsswitch.conf
+    - key: listening_ports
+      command: ss -tulpen
+    - key: established_connections
+      command: ss -tunap state established
+  register: audit_network_commands
+  changed_when: false
+  failed_when: false
+
+- name: Capture NetworkManager and legacy network config metadata
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf 'nmcli_connections\n'
+    nmcli -t -f NAME,UUID,TYPE,DEVICE con show 2>/dev/null || true
+    printf 'network_files\n'
+    find /etc/sysconfig/network-scripts /etc/NetworkManager/system-connections -maxdepth 1 -type f \
+      -printf '%p|%u|%g|%m|%s|%TY-%Tm-%TdT%TH:%TM:%TS\n' 2>/dev/null || true
+    printf 'proxy_environment\n'
+    env | egrep -i '^(http|https|no)_proxy=' || true
+  args:
+    executable: /bin/bash
+  register: audit_network_config_metadata
+  changed_when: false
+  failed_when: false
+
+- name: Store network dependency audit data
+  ansible.builtin.set_fact:
+    audit_network:
+      commands: "{{ audit_network_commands.results | default([]) }}"
+      config_metadata: "{{ audit_network_config_metadata.stdout_lines | default([]) }}"

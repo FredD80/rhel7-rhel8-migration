@@ -27,6 +27,21 @@ Allowed `cutover_strategies` values:
 
 DNS is always included. During AWS capture, if the RHEL 7 source instance has an Elastic IP attached, the audit playbook automatically adds `eip` to the effective cutover strategies so both DNS and EIP are represented in the proposed manifest.
 
+## Outputs
+
+The playbook writes two controller-local files and uploads the same files to S3 when `audit_upload_to_s3` is true:
+
+```text
+s3://<artifact_bucket>/rhel-migration/<migration_id>/phase-2-audit/sanitized/<timestamp>-sanitized.yml
+s3://<artifact_bucket>/rhel-migration/<migration_id>/manifest/proposed/<timestamp>-proposed.yml
+```
+
+For local syntax or dry-run development without S3 upload, pass:
+
+```text
+-e audit_upload_to_s3=false
+```
+
 CLI example:
 
 ```text

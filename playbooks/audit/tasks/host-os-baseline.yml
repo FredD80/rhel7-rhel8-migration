@@ -1,4 +1,88 @@
 ---
-- name: Not implemented - host and OS baseline audit
-  ansible.builtin.fail:
-    msg: "TODO: implement host and OS baseline capture from specification section 11.2."
+- name: Capture host and OS baseline commands
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: hostnamectl
+      command: hostnamectl
+    - key: os_release
+      command: cat /etc/os-release
+    - key: kernel
+      command: uname -a
+    - key: uptime
+      command: uptime
+    - key: boot_cmdline
+      command: cat /proc/cmdline
+    - key: rpm_packages
+      command: "rpm -qa --qf '%{NAME}|%{EPOCH}|%{VERSION}|%{RELEASE}|%{ARCH}|%{INSTALLTIME}|%{VENDOR}\n'"
+    - key: yum_repolist
+      command: yum repolist all
+    - key: yum_installed
+      command: yum list installed
+    - key: rpm_gpg_pubkeys
+      command: "rpm -qa gpg-pubkey --qf '%{NAME}|%{VERSION}|%{RELEASE}|%{SUMMARY}\n'"
+    - key: loaded_modules
+      command: lsmod
+    - key: timezone
+      command: timedatectl
+  register: audit_host_os_commands
+  changed_when: false
+  failed_when: false
+
+- name: Find repository and package-manager config files
+  ansible.builtin.find:
+    paths:
+      - /etc/yum.repos.d
+      - /etc/yum/pluginconf.d
+    file_type: file
+    hidden: true
+  register: audit_yum_config_files
+  failed_when: false
+  changed_when: false
+
+- name: Stat package-manager and time config files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - /etc/yum.conf
+    - /etc/rhsm/rhsm.conf
+    - /etc/chrony.conf
+    - /etc/ntp.conf
+    - /etc/localtime
+    - /etc/postfix/main.cf
+    - /etc/mail/sendmail.cf
+  register: audit_host_os_file_stats
+  failed_when: false
+  changed_when: false
+
+- name: Capture RHEL 7 to RHEL 8 compatibility signals
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf 'python_shebangs\n'
+    find /opt /usr/local -xdev -type f -size -2M 2>/dev/null \
+      -exec awk 'FNR==1 && /^#!.*python/ {print FILENAME ":" $0}' {} \; || true
+    printf 'database_packages\n'
+    rpm -qa | egrep -i '^(postgresql|postgres|mysql|mariadb|mongodb|redis|oracle|sqlite)' || true
+    printf 'btrfs_mounts\n'
+    findmnt -t btrfs --noheadings --output TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: audit_compatibility_signals
+  changed_when: false
+  failed_when: false
+
+- name: Store host and OS baseline audit data
+  ansible.builtin.set_fact:
+    audit_host_os:
+      ansible_distribution: "{{ ansible_distribution | default('') }}"
+      ansible_distribution_version: "{{ ansible_distribution_version | default('') }}"
+      ansible_distribution_major_version: "{{ ansible_distribution_major_version | default('') }}"
+      ansible_kernel: "{{ ansible_kernel | default('') }}"
+      ansible_architecture: "{{ ansible_architecture | default('') }}"
+      ansible_hostname: "{{ ansible_hostname | default('') }}"
+      ansible_fqdn: "{{ ansible_fqdn | default('') }}"
+      ansible_default_ipv4: "{{ ansible_default_ipv4 | default({}) }}"
+      commands: "{{ audit_host_os_commands.results | default([]) }}"
+      yum_config_files: "{{ audit_yum_config_files.files | default([]) }}"
+      config_file_stats: "{{ audit_host_os_file_stats.results | default([]) }}"
+      compatibility_signals: "{{ audit_compatibility_signals.stdout_lines | default([]) }}"

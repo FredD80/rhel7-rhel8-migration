@@ -1,4 +1,100 @@
 ---
-- name: Not implemented - SSH key material and trust audit
-  ansible.builtin.fail:
-    msg: "TODO: implement SSH host key, authorized key, known-host, SSH CA, private-key metadata, and SSH dependency capture from specification section 11.7."
+- name: Capture SSH daemon and client configuration metadata
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: sshd_effective_config
+      command: sshd -T
+    - key: sshd_config_test
+      command: sshd -t
+  register: audit_ssh_config_commands
+  changed_when: false
+  failed_when: false
+
+- name: Capture SSH host public key fingerprints
+  ansible.builtin.shell: |
+    for file in /etc/ssh/ssh_host_*_key.pub; do
+      [ -f "$file" ] || continue
+      stat -c 'file|%n|%U|%G|%a|%s|%Y' "$file"
+      ssh-keygen -l -f "$file" 2>/dev/null || true
+    done
+  register: audit_ssh_host_public_fingerprints
+  changed_when: false
+  failed_when: false
+
+- name: Capture SSH private key file metadata only
+  ansible.builtin.shell: |
+    for file in /etc/ssh/ssh_host_*_key; do
+      [ -f "$file" ] || continue
+      case "$file" in *.pub) continue ;; esac
+      stat -c 'file|%n|%U|%G|%a|%s|%Y' "$file"
+    done
+  register: audit_ssh_private_key_metadata
+  changed_when: false
+  failed_when: false
+
+- name: Capture authorized key fingerprints and file metadata
+  ansible.builtin.shell: |
+    set -o pipefail
+    awk -F: '{print $1"|"$3"|"$4"|"$6"|"$7}' /etc/passwd | while IFS='|' read -r user uid gid home shell; do
+      [ -n "$home" ] || continue
+      for file in "$home/.ssh/authorized_keys" "$home/.ssh/authorized_keys2"; do
+        [ -f "$file" ] || continue
+        printf 'account|%s|%s|%s|%s\n' "$user" "$uid" "$gid" "$shell"
+        stat -c 'file|%n|%U|%G|%a|%s|%Y' "$file"
+        ssh-keygen -l -f "$file" 2>/dev/null || true
+      done
+    done
+  args:
+    executable: /bin/bash
+  register: audit_authorized_key_fingerprints
+  changed_when: false
+  failed_when: false
+
+- name: Capture known-host fingerprints and SSH client config metadata
+  ansible.builtin.shell: |
+    set -o pipefail
+    for file in /etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2 /root/.ssh/known_hosts; do
+      [ -f "$file" ] || continue
+      stat -c 'known_hosts|%n|%U|%G|%a|%s|%Y' "$file"
+      ssh-keygen -l -f "$file" 2>/dev/null || true
+    done
+    awk -F: '{print $1"|"$6}' /etc/passwd | while IFS='|' read -r user home; do
+      [ -f "$home/.ssh/known_hosts" ] || continue
+      printf 'account|%s\n' "$user"
+      stat -c 'known_hosts|%n|%U|%G|%a|%s|%Y' "$home/.ssh/known_hosts"
+      ssh-keygen -l -f "$home/.ssh/known_hosts" 2>/dev/null || true
+    done
+    for file in /etc/ssh/ssh_config /etc/ssh/ssh_config.d/*; do
+      [ -f "$file" ] || continue
+      stat -c 'client_config|%n|%U|%G|%a|%s|%Y' "$file"
+    done
+  args:
+    executable: /bin/bash
+  register: audit_known_hosts_and_client_config
+  changed_when: false
+  failed_when: false
+
+- name: Capture SSH private key locations for root and service accounts as metadata only
+  ansible.builtin.shell: |
+    set -o pipefail
+    awk -F: '$6 ~ /^\// {print $1"|"$6}' /etc/passwd | while IFS='|' read -r user home; do
+      [ -d "$home/.ssh" ] || continue
+      find "$home/.ssh" -maxdepth 1 -type f \
+        \( -name 'id_*' -o -name '*.pem' -o -name '*.key' \) ! -name '*.pub' \
+        -printf "private_key_metadata|$user|%p|%u|%g|%m|%s|%TY-%Tm-%TdT%TH:%TM:%TS\n" 2>/dev/null || true
+    done
+  args:
+    executable: /bin/bash
+  register: audit_ssh_private_key_locations
+  changed_when: false
+  failed_when: false
+
+- name: Store SSH key material audit data
+  ansible.builtin.set_fact:
+    audit_ssh:
+      config_commands: "{{ audit_ssh_config_commands.results | default([]) }}"
+      host_public_key_fingerprints: "{{ audit_ssh_host_public_fingerprints.stdout_lines | default([]) }}"
+      host_private_key_metadata: "{{ audit_ssh_private_key_metadata.stdout_lines | default([]) }}"
+      authorized_key_fingerprints: "{{ audit_authorized_key_fingerprints.stdout_lines | default([]) }}"
+      known_hosts_and_client_config: "{{ audit_known_hosts_and_client_config.stdout_lines | default([]) }}"
+      private_key_locations_metadata_only: "{{ audit_ssh_private_key_locations.stdout_lines | default([]) }}"

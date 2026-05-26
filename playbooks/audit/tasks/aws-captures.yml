@@ -35,6 +35,56 @@
   failed_when: false
   when: (audit_imds_token.status | default(0)) != 200
 
+- name: Query EC2 instance identity document with metadata token
+  ansible.builtin.uri:
+    url: "http://169.254.169.254/latest/dynamic/instance-identity/document"
+    method: GET
+    headers:
+      X-aws-ec2-metadata-token: "{{ audit_imds_token.content }}"
+    return_content: true
+    timeout: 3
+  register: audit_instance_identity_document_token
+  changed_when: false
+  failed_when: false
+  when: (audit_imds_token.status | default(0)) == 200
+
+- name: Query EC2 instance identity document without metadata token
+  ansible.builtin.uri:
+    url: "http://169.254.169.254/latest/dynamic/instance-identity/document"
+    method: GET
+    return_content: true
+    timeout: 3
+  register: audit_instance_identity_document_no_token
+  changed_when: false
+  failed_when: false
+  when: (audit_imds_token.status | default(0)) != 200
+
+- name: Query common EC2 metadata paths
+  ansible.builtin.uri:
+    url: "http://169.254.169.254/latest/meta-data/{{ item.path }}"
+    method: GET
+    headers: "{{ {'X-aws-ec2-metadata-token': audit_imds_token.content} if (audit_imds_token.status | default(0)) == 200 else {} }}"
+    return_content: true
+    timeout: 3
+  loop:
+    - key: ami_id
+      path: ami-id
+    - key: instance_type
+      path: instance-type
+    - key: availability_zone
+      path: placement/availability-zone
+    - key: local_ipv4
+      path: local-ipv4
+    - key: local_hostname
+      path: local-hostname
+    - key: iam_info
+      path: iam/info
+    - key: macs
+      path: network/interfaces/macs/
+  register: audit_common_metadata
+  changed_when: false
+  failed_when: false
+
 - name: Set source instance ID from metadata
   ansible.builtin.set_fact:
     audit_source_instance_id: >-
@@ -52,7 +102,60 @@
   delegate_to: localhost
   become: false
   register: audit_source_eip_info
+  failed_when: false
   when: audit_source_instance_id | length > 0
+
+- name: Look up EC2 instance details
+  amazon.aws.ec2_instance_info:
+    region: "{{ audit_context.aws_region }}"
+    instance_ids:
+      - "{{ audit_source_instance_id }}"
+  delegate_to: localhost
+  become: false
+  register: audit_source_instance_info
+  failed_when: false
+  when: audit_source_instance_id | length > 0
+
+- name: Look up EC2 volume details from instance filters
+  amazon.aws.ec2_vol_info:
+    region: "{{ audit_context.aws_region }}"
+    filters:
+      attachment.instance-id: "{{ audit_source_instance_id }}"
+  delegate_to: localhost
+  become: false
+  register: audit_source_volume_info
+  failed_when: false
+  when: audit_source_instance_id | length > 0
+
+- name: Look up network interfaces for source instance
+  amazon.aws.ec2_eni_info:
+    region: "{{ audit_context.aws_region }}"
+    filters:
+      attachment.instance-id: "{{ audit_source_instance_id }}"
+  delegate_to: localhost
+  become: false
+  register: audit_source_eni_info
+  failed_when: false
+  when: audit_source_instance_id | length > 0
+
+- name: Build security group ID list from instance info
+  ansible.builtin.set_fact:
+    audit_source_security_group_ids: >-
+      {{
+        (((audit_source_instance_info.instances | default([])) | first | default({})).security_groups | default([]))
+        | map(attribute='group_id')
+        | list
+      }}
+
+- name: Look up security group details
+  amazon.aws.ec2_security_group_info:
+    region: "{{ audit_context.aws_region }}"
+    group_ids: "{{ audit_source_security_group_ids }}"
+  delegate_to: localhost
+  become: false
+  register: audit_source_security_group_info
+  failed_when: false
+  when: audit_source_security_group_ids | length > 0
 
 - name: Add EIP cutover strategy when Elastic IP is attached
   ansible.builtin.set_fact:
@@ -72,13 +175,28 @@
         }, recursive=True)
       }}
 
+- name: Store AWS audit data
+  ansible.builtin.set_fact:
+    audit_aws:
+      imds_available: "{{ (audit_imds_token.status | default(0)) == 200 or audit_source_instance_id | length > 0 }}"
+      instance_id: "{{ audit_source_instance_id }}"
+      identity_document: >-
+        {{
+          (audit_instance_identity_document_token.content | from_json)
+          if (audit_instance_identity_document_token.status | default(0)) == 200 else
+          ((audit_instance_identity_document_no_token.content | from_json)
+            if (audit_instance_identity_document_no_token.status | default(0)) == 200 else {})
+        }}
+      metadata: "{{ audit_common_metadata.results | default([]) }}"
+      instance_info: "{{ audit_source_instance_info.instances | default([]) }}"
+      volume_info: "{{ audit_source_volume_info.volumes | default([]) }}"
+      eni_info: "{{ audit_source_eni_info.network_interfaces | default([]) }}"
+      security_groups: "{{ audit_source_security_group_info.security_groups | default([]) }}"
+      elastic_ips: "{{ audit_source_eip_info.addresses | default([]) }}"
+
 - name: Show detected cutover strategies
   ansible.builtin.debug:
     msg:
       - "Source instance ID: {{ audit_context.source_instance_id | default('unknown') }}"
       - "Detected Elastic IP count: {{ audit_context.source_elastic_ips | default([]) | length }}"
       - "Effective cutover strategies: {{ audit_context.effective_cutover_strategies | join(',') }}"
-
-- name: Not implemented - remaining AWS capture audit
-  ansible.builtin.fail:
-    msg: "TODO: implement remaining AWS instance, IAM, security group, NACL, ENI, EBS, KMS, Route 53, and load balancer capture from specification section 11.9."

@@ -1,8 +1,105 @@
 ---
 - name: Load and validate approved migration manifest
   hosts: localhost
+  gather_facts: true
+  tasks:
+    - name: Load approved manifest
+      ansible.builtin.import_tasks: tasks/load-approved-manifest.yml
+
+    - name: Look up approved data volumes in AWS
+      amazon.aws.ec2_vol_info:
+        region: "{{ aws_region | trim }}"
+        filters:
+          volume-id: "{{ migration_manifest.data_volumes | map(attribute='volume_id') | list }}"
+      register: migration_volume_info
+      when: migration_manifest.data_volumes | default([]) | length > 0
+
+    - name: Validate all manifest data volumes exist in AWS
+      ansible.builtin.assert:
+        that:
+          - >-
+            {{
+              (migration_manifest.data_volumes | map(attribute='volume_id') | list | difference(migration_volume_info.volumes | default([]) | map(attribute='id') | list) | length) == 0
+            }}
+        fail_msg: "One or more approved manifest data volumes were not found in AWS."
+      when: migration_manifest.data_volumes | default([]) | length > 0
+
+    - name: Build manifest validation report
+      ansible.builtin.set_fact:
+        migration_manifest_validation_report:
+          metadata:
+            migration_id: "{{ migration_id }}"
+            phase: phase-4-migrate
+            action: load-validate-manifest
+            git_commit_sha: "{{ scm_revision | default('unknown') }}"
+            ansible_version: "{{ ansible_version.full | default('unknown') }}"
+            completed_at: "{{ ansible_date_time.iso8601 }}"
+            result: success
+          manifest_source: "{{ migration_manifest_source }}"
+          source:
+            instance_id: "{{ migration_manifest.source.instance_id | default('') }}"
+            hostname: "{{ migration_manifest.source.hostname | default('') }}"
+            private_ip: "{{ migration_manifest.source.private_ip | default('') }}"
+          root_sync_path_count: "{{ migration_manifest.root_sync_paths | default([]) | length }}"
+          data_volume_count: "{{ migration_manifest.data_volumes | default([]) | length }}"
+          aws_volume_records: "{{ migration_volume_info.volumes | default([]) }}"
+
+    - name: Upload manifest validation report to S3
+      amazon.aws.s3_object:
+        bucket: "{{ artifact_bucket | trim }}"
+        object: "{{ migration_artifact_prefix }}/phase-4-migrate/{{ migration_timestamp }}-manifest-validation.yml"
+        content: "{{ migration_manifest_validation_report | to_nice_yaml(indent=2, sort_keys=false) }}"
+        mode: put
+        region: "{{ aws_region | trim }}"
+        encrypt: true
+        encryption_mode: "{{ 'aws:kms' if migration_artifact_kms_key_id is defined else omit }}"
+        encryption_kms_key_id: "{{ migration_artifact_kms_key_id | default(omit) }}"
+      when: migration_upload_to_s3 | default(true) | bool
+
+- name: Validate approved source root paths on RHEL 7
+  hosts: "{{ rhel7_source_group | default(rhel7_source_host | default('rhel7_sources')) }}"
+  become: true
   gather_facts: false
   tasks:
-    - name: Not implemented - load and validate manifest
-      ansible.builtin.fail:
-        msg: "TODO: implement approved manifest download, checksum, version, and schema validation."
+    - name: Stat approved source root sync paths
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ hostvars['localhost'].migration_manifest.root_sync_paths | default([]) }}"
+      register: migration_source_path_stats
+      failed_when: false
+      changed_when: false
+
+    - name: Fail when any approved source path is missing
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists | default(false)
+        fail_msg: "Approved source path does not exist on RHEL 7: {{ item.item.path }}"
+      loop: "{{ migration_source_path_stats.results | default([]) }}"
+
+    - name: Upload source path validation report to S3
+      amazon.aws.s3_object:
+        bucket: "{{ artifact_bucket | trim }}"
+        object: "{{ hostvars['localhost'].migration_artifact_prefix }}/phase-4-migrate/{{ hostvars['localhost'].migration_timestamp }}-source-path-validation-{{ inventory_hostname }}.yml"
+        content: >-
+          {{
+            {
+              'metadata': {
+                'migration_id': migration_id,
+                'phase': 'phase-4-migrate',
+                'action': 'source-path-validation',
+                'source_host': inventory_hostname,
+                'completed_at': ansible_date_time.iso8601 | default('unknown'),
+                'result': 'success'
+              },
+              'manifest_source': hostvars['localhost'].migration_manifest_source,
+              'path_results': migration_source_path_stats.results | default([])
+            } | to_nice_yaml(indent=2, sort_keys=false)
+          }}
+        mode: put
+        region: "{{ aws_region | trim }}"
+        encrypt: true
+        encryption_mode: "{{ 'aws:kms' if migration_artifact_kms_key_id is defined else omit }}"
+        encryption_kms_key_id: "{{ migration_artifact_kms_key_id | default(omit) }}"
+      delegate_to: localhost
+      become: false
+      when: migration_upload_to_s3 | default(true) | bool

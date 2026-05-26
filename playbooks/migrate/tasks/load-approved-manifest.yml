@@ -1,0 +1,114 @@
+---
+- name: Validate required manifest input variables
+  ansible.builtin.assert:
+    that:
+      - migration_id is defined
+      - artifact_bucket is defined
+      - aws_region is defined
+      - migration_id | trim | length > 0
+      - artifact_bucket | trim | length > 0
+      - aws_region | trim | length > 0
+    fail_msg: "Required inputs: migration_id, artifact_bucket, and aws_region."
+
+- name: Set approved manifest object defaults
+  ansible.builtin.set_fact:
+    migration_approved_manifest_key: >-
+      {{ approved_manifest_key | default('rhel-migration/' ~ (migration_id | trim) ~ '/manifest/approved/approved.yml') }}
+    migration_artifact_prefix: "rhel-migration/{{ migration_id | trim }}"
+    migration_timestamp: "{{ migration_timestamp | default(ansible_date_time.iso8601_basic_short) }}"
+
+- name: Create manifest download directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "rhel-migration-manifest-{{ migration_id | trim }}-"
+  register: migration_manifest_tempdir
+  when: approved_manifest_local_path is not defined
+
+- name: Download approved manifest from S3
+  amazon.aws.s3_object:
+    bucket: "{{ artifact_bucket | trim }}"
+    object: "{{ migration_approved_manifest_key }}"
+    dest: "{{ migration_manifest_tempdir.path }}/approved.yml"
+    mode: get
+    region: "{{ aws_region | trim }}"
+    version: "{{ approved_manifest_version_id | default(omit) }}"
+    overwrite: always
+  register: migration_manifest_s3_get
+  when: approved_manifest_local_path is not defined
+
+- name: Read approved manifest content
+  ansible.builtin.set_fact:
+    migration_manifest_content: >-
+      {{
+        lookup('ansible.builtin.file', approved_manifest_local_path)
+        if approved_manifest_local_path is defined else
+        lookup('ansible.builtin.file', migration_manifest_tempdir.path ~ '/approved.yml')
+      }}
+
+- name: Parse approved manifest
+  ansible.builtin.set_fact:
+    migration_manifest: "{{ migration_manifest_content | from_yaml }}"
+    migration_manifest_checksum: "{{ migration_manifest_content | hash('sha256') }}"
+    migration_manifest_source:
+      bucket: "{{ artifact_bucket | trim }}"
+      key: "{{ migration_approved_manifest_key }}"
+      version_id: "{{ approved_manifest_version_id | default('not-pinned') }}"
+      checksum_sha256: "{{ migration_manifest_content | hash('sha256') }}"
+      local_path: "{{ approved_manifest_local_path | default(migration_manifest_tempdir.path ~ '/approved.yml') }}"
+
+- name: Validate approved manifest structure
+  ansible.builtin.assert:
+    that:
+      - migration_manifest is mapping
+      - migration_manifest.manifest_version is defined
+      - migration_manifest.migration_id is defined
+      - migration_manifest.migration_id == migration_id
+      - migration_manifest.source is defined
+      - migration_manifest.source is mapping
+      - migration_manifest.cutover is defined
+      - migration_manifest.cutover.strategy is defined
+      - migration_manifest.root_sync_paths is defined
+      - migration_manifest.root_sync_paths is iterable
+      - migration_manifest.data_volumes is defined
+      - migration_manifest.data_volumes is iterable
+    fail_msg: "Approved manifest is missing required migration fields."
+
+- name: Validate approved root sync paths
+  ansible.builtin.assert:
+    that:
+      - item.path is defined
+      - item.path is string
+      - item.path | length > 1
+      - item.path[0] == '/'
+      - item.path not in migration_forbidden_root_sync_paths
+      - not (item.path | regex_search('/\.\.?(/|$)'))
+      - not (item.path | regex_search('^/(proc|sys|dev|run|boot)(/|$)'))
+      - not (item.path | regex_search('^/var/lib/rpm(/|$)'))
+      - not ((item.path | regex_search('^/usr(/|$)')) and not (item.path | regex_search('^/usr/local(/|$)')))
+    fail_msg: "Unsafe root_sync_paths entry in approved manifest: {{ item | to_json }}"
+  loop: "{{ migration_manifest.root_sync_paths | default([]) }}"
+  vars:
+    migration_forbidden_root_sync_paths:
+      - /
+      - /etc
+      - /usr
+      - /bin
+      - /sbin
+      - /lib
+      - /lib64
+      - /boot
+      - /dev
+      - /proc
+      - /sys
+      - /run
+      - /tmp
+      - /var/lib/rpm
+
+- name: Validate data-volume IDs when present
+  ansible.builtin.assert:
+    that:
+      - item.volume_id is defined
+      - item.volume_id is match('^vol-[0-9a-f]+$')
+    fail_msg: "Invalid data volume record in approved manifest: {{ item | to_json }}"
+  loop: "{{ migration_manifest.data_volumes | default([]) }}"
+  when: migration_manifest.data_volumes | default([]) | length > 0

@@ -1,4 +1,59 @@
 ---
-- name: Not implemented - services, schedules, and runtime audit
-  ansible.builtin.fail:
-    msg: "TODO: implement systemd, SysV, cron, timers, process, port, and agent capture from specification section 11.4."
+- name: Capture services, schedules, and runtime commands
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: systemd_units
+      command: systemctl list-units --all --no-pager --plain
+    - key: systemd_unit_files
+      command: systemctl list-unit-files --no-pager --plain
+    - key: systemd_failed
+      command: systemctl --failed --no-pager --plain
+    - key: systemd_timers
+      command: systemctl list-timers --all --no-pager --plain
+    - key: listening_ports
+      command: ss -tulpen
+    - key: process_summary
+      command: ps -eo user,pid,ppid,stat,comm --sort user,pid
+    - key: at_queue
+      command: atq
+  register: audit_runtime_commands
+  changed_when: false
+  failed_when: false
+
+- name: Find service and schedule files
+  ansible.builtin.find:
+    paths:
+      - /etc/systemd/system
+      - /etc/cron.d
+      - /etc/cron.daily
+      - /etc/cron.hourly
+      - /etc/cron.monthly
+      - /etc/cron.weekly
+      - /var/spool/cron
+      - /etc/xinetd.d
+      - /etc/init.d
+    file_type: any
+    hidden: true
+  register: audit_service_schedule_files
+  failed_when: false
+  changed_when: false
+
+- name: Capture management agent package and service signals
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf 'packages\n'
+    rpm -qa | egrep -i '(splunk|newrelic|new-relic|crowdstrike|falcon|amazon-ssm|cloudwatch)' || true
+    printf 'services\n'
+    systemctl list-unit-files --no-pager --plain 2>/dev/null | egrep -i '(splunk|newrelic|new-relic|crowdstrike|falcon|amazon-ssm|cloudwatch)' || true
+  args:
+    executable: /bin/bash
+  register: audit_agent_signals
+  changed_when: false
+  failed_when: false
+
+- name: Store services, schedules, and runtime audit data
+  ansible.builtin.set_fact:
+    audit_runtime:
+      commands: "{{ audit_runtime_commands.results | default([]) }}"
+      service_schedule_files: "{{ audit_service_schedule_files.files | default([]) }}"
+      agent_signals: "{{ audit_agent_signals.stdout_lines | default([]) }}"

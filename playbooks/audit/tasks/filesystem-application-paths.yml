@@ -1,4 +1,85 @@
 ---
-- name: Not implemented - filesystem and application path audit
-  ansible.builtin.fail:
-    msg: "TODO: implement filesystem, root-sync candidates, file metadata, package ownership, and application path capture from specification section 11.5."
+- name: Capture filesystem topology commands
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: findmnt
+      command: findmnt --output TARGET,SOURCE,FSTYPE,OPTIONS,UUID,LABEL
+    - key: lsblk
+      command: lsblk -P -o NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,UUID,LABEL,MODEL,SERIAL
+    - key: df
+      command: df -PT
+    - key: fstab
+      command: cat /etc/fstab
+    - key: pvs
+      command: pvs --reportformat json
+    - key: vgs
+      command: vgs --reportformat json
+    - key: lvs
+      command: lvs --reportformat json -a -o +devices
+    - key: btrfs_mounts
+      command: findmnt -t btrfs --output TARGET,SOURCE,FSTYPE,OPTIONS
+  register: audit_filesystem_commands
+  changed_when: false
+  failed_when: false
+
+- name: Stat root-sync candidate top-level paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - /opt
+    - /srv
+    - /usr/local
+    - /var/opt
+    - /var/www
+    - /etc/systemd/system
+    - /etc/sysconfig
+    - /etc/default
+    - /etc/tmpfiles.d
+    - /etc/logrotate.d
+  register: audit_root_sync_candidate_stats
+  failed_when: false
+  changed_when: false
+
+- name: Capture root-sync candidate metadata summaries
+  ansible.builtin.shell: |
+    set -o pipefail
+    for path in /opt /srv /usr/local /var/opt /var/www; do
+      [ -e "$path" ] || continue
+      printf 'path=%s\n' "$path"
+      du -sx --block-size=1 "$path" 2>/dev/null || true
+      find "$path" -xdev -maxdepth 2 \( -type f -o -type d -o -type l \) \
+        -printf '%y|%m|%U|%G|%s|%TY-%Tm-%TdT%TH:%TM:%TS|%p\n' 2>/dev/null | head -500 || true
+      getfacl -p "$path" 2>/dev/null | sed -n '1,80p' || true
+      getfattr -d -m- "$path" 2>/dev/null | sed -n '1,80p' || true
+      getcap -r "$path" 2>/dev/null | head -200 || true
+    done
+  args:
+    executable: /bin/bash
+  register: audit_root_sync_candidate_metadata
+  changed_when: false
+  failed_when: false
+
+- name: Capture package ownership of candidate config paths
+  ansible.builtin.shell: |
+    set -o pipefail
+    for path in /etc/systemd/system /etc/sysconfig /etc/default /etc/tmpfiles.d /etc/logrotate.d; do
+      [ -e "$path" ] || continue
+      find "$path" -xdev -maxdepth 3 -type f 2>/dev/null | head -500 | while read -r file; do
+        owner=$(rpm -qf "$file" 2>/dev/null || true)
+        printf '%s|%s\n' "$file" "$owner"
+      done
+    done
+  args:
+    executable: /bin/bash
+  register: audit_candidate_package_ownership
+  changed_when: false
+  failed_when: false
+
+- name: Store filesystem and application path audit data
+  ansible.builtin.set_fact:
+    audit_filesystem:
+      commands: "{{ audit_filesystem_commands.results | default([]) }}"
+      root_sync_candidate_stats: "{{ audit_root_sync_candidate_stats.results | default([]) }}"
+      root_sync_candidate_metadata: "{{ audit_root_sync_candidate_metadata.stdout_lines | default([]) }}"
+      candidate_package_ownership: "{{ audit_candidate_package_ownership.stdout_lines | default([]) }}"

@@ -1,4 +1,80 @@
 ---
-- name: Not implemented - security settings audit
-  ansible.builtin.fail:
-    msg: "TODO: implement SELinux, FIPS, crypto, auth, sudo, firewall, auditd, and certificate metadata capture from specification section 11.6."
+- name: Capture security setting commands
+  ansible.builtin.command: "{{ item.command }}"
+  loop:
+    - key: getenforce
+      command: getenforce
+    - key: sestatus
+      command: sestatus
+    - key: semodule
+      command: semodule -lfull
+    - key: sebooleans
+      command: getsebool -a
+    - key: fips_runtime
+      command: cat /proc/sys/crypto/fips_enabled
+    - key: fips_setup
+      command: fips-mode-setup --check
+    - key: crypto_policy
+      command: update-crypto-policies --show
+    - key: sshd_effective_config
+      command: sshd -T
+    - key: authconfig
+      command: authconfig --test
+    - key: firewall_state
+      command: firewall-cmd --state
+    - key: firewall_zones
+      command: firewall-cmd --list-all-zones
+    - key: firewall_direct
+      command: firewall-cmd --direct --get-all-rules
+    - key: iptables
+      command: iptables-save
+    - key: ip6tables
+      command: ip6tables-save
+    - key: nft
+      command: nft list ruleset
+    - key: auditd_status
+      command: auditctl -s
+    - key: auditd_rules
+      command: auditctl -l
+  register: audit_security_commands
+  changed_when: false
+  failed_when: false
+
+- name: Find security configuration files
+  ansible.builtin.find:
+    paths:
+      - /etc/selinux
+      - /etc/security
+      - /etc/pam.d
+      - /etc/ssh
+      - /etc/sysctl.d
+      - /etc/modprobe.d
+      - /etc/audit
+      - /etc/pki/ca-trust/source/anchors
+    file_type: any
+    hidden: true
+  register: audit_security_config_files
+  failed_when: false
+  changed_when: false
+
+- name: Capture targeted sysctl and AVC signals
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf 'custom_sysctl\n'
+    sysctl -a 2>/dev/null | egrep '^(net\.|fs\.|kernel\.|vm\.)' || true
+    printf 'recent_avc\n'
+    ausearch -m AVC,USER_AVC -ts recent 2>/dev/null | tail -500 || true
+    printf 'fcontext_custom\n'
+    semanage fcontext -l -C 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: audit_security_signals
+  changed_when: false
+  failed_when: false
+
+- name: Store security settings audit data
+  ansible.builtin.set_fact:
+    audit_security:
+      commands: "{{ audit_security_commands.results | default([]) }}"
+      config_files: "{{ audit_security_config_files.files | default([]) }}"
+      signals: "{{ audit_security_signals.stdout_lines | default([]) }}"

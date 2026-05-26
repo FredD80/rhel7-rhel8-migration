@@ -1,4 +1,139 @@
 ---
-- name: Not implemented - proposed manifest generation
-  ansible.builtin.fail:
-    msg: "TODO: generate the proposed migration manifest from sanitized audit inputs, including audit_context.effective_cutover_strategies and detected EIP details, per specification section 11.10."
+- name: Build proposed root sync path list
+  ansible.builtin.set_fact:
+    audit_proposed_root_sync_paths: >-
+      {{
+        (audit_filesystem.root_sync_candidate_stats | default([]))
+        | selectattr('stat.exists', 'defined')
+        | selectattr('stat.exists')
+        | map(attribute='stat.path')
+        | list
+      }}
+
+- name: Initialize proposed root sync path records
+  ansible.builtin.set_fact:
+    audit_proposed_root_sync_path_records: []
+
+- name: Build proposed root sync path records
+  ansible.builtin.set_fact:
+    audit_proposed_root_sync_path_records: >-
+      {{
+        audit_proposed_root_sync_path_records + [
+          {
+            'path': item,
+            'owner_service': 'REVIEW_REQUIRED',
+            'one_file_system': true,
+            'delete_allowed': false,
+            'preserve_acls': true,
+            'preserve_xattrs': true,
+            'preserve_hardlinks': true,
+            'preserve_numeric_ids': true,
+            'excludes': ['cache/', 'tmp/', '*.tmp'],
+            'validation': {
+              'file_count_parity': true,
+              'size_parity': true,
+              'sha256_spotcheck': []
+            },
+            'selinux': {
+              'restorecon_after_sync': true,
+              'expected_contexts': []
+            },
+            'review_required': true
+          }
+        ]
+      }}
+  loop: "{{ audit_proposed_root_sync_paths }}"
+
+- name: Build proposed migration manifest
+  ansible.builtin.set_fact:
+    audit_proposed_manifest:
+      manifest_version: 1
+      migration_id: "{{ audit_context.migration_id }}"
+      change_ticket: "REVIEW_REQUIRED"
+      source:
+        instance_id: "{{ audit_aws.instance_id | default(audit_context.source_instance_id | default('')) }}"
+        hostname: "{{ ansible_hostname | default('') }}"
+        fqdn: "{{ ansible_fqdn | default('') }}"
+        private_ip: "{{ ansible_default_ipv4.address | default('') }}"
+        availability_zone: "{{ (audit_aws.identity_document.availabilityZone | default('')) if audit_aws is defined else '' }}"
+        vpc_id: "{{ ((audit_aws.instance_info | default([]) | first | default({})).vpc_id | default('')) }}"
+        subnet_id: "{{ ((audit_aws.instance_info | default([]) | first | default({})).subnet_id | default('')) }}"
+        security_group_ids: "{{ audit_source_security_group_ids | default([]) }}"
+        iam_instance_profile: "{{ ((audit_aws.instance_info | default([]) | first | default({})).iam_instance_profile.arn | default('')) }}"
+      target:
+        provisioning_method: manual
+        availability_zone: "{{ (audit_aws.identity_document.availabilityZone | default('')) if audit_aws is defined else '' }}"
+        vpc_id: "{{ ((audit_aws.instance_info | default([]) | first | default({})).vpc_id | default('')) }}"
+        subnet_id: "{{ ((audit_aws.instance_info | default([]) | first | default({})).subnet_id | default('')) }}"
+      compliance:
+        fedramp_boundary: REVIEW_REQUIRED
+        fips_required: REVIEW_REQUIRED
+        crypto_policy: REVIEW_REQUIRED
+        selinux_required_state: enforcing
+        openscap_profile: REVIEW_REQUIRED
+        tailoring_file: REVIEW_REQUIRED
+      cutover:
+        strategy: dns
+        available_strategies: "{{ audit_context.effective_cutover_strategies | default(['dns']) }}"
+        dns:
+          hosted_zone_id: REVIEW_REQUIRED
+          record_name: "{{ ansible_fqdn | default(ansible_hostname | default('REVIEW_REQUIRED')) }}"
+          record_type: A
+          source_value: "{{ ansible_default_ipv4.address | default('') }}"
+          target_value: REVIEW_REQUIRED
+          pre_cutover_ttl: 60
+          restore_ttl: 300
+        eip:
+          detected_elastic_ips: "{{ audit_context.source_elastic_ips | default([]) }}"
+        ttl_restore_required: true
+      rollback:
+        window_hours: REVIEW_REQUIRED
+        rpo_statement: REVIEW_REQUIRED
+        owner_approval_reference: REVIEW_REQUIRED
+      root_sync_paths: "{{ audit_proposed_root_sync_path_records | default([]) }}"
+      proposed_root_sync_path_names: "{{ audit_proposed_root_sync_paths }}"
+      data_volumes:
+        review_source: audit_aws.volume_info plus audit_filesystem.commands
+        records: "{{ audit_aws.volume_info | default([]) }}"
+      users_and_groups:
+        review_source: audit_identities
+        local_identity_commands: "{{ audit_identities.commands | default([]) }}"
+      ssh:
+        host_key_strategy: generate_new
+        source_host_key_fingerprints: "{{ audit_ssh.host_public_key_fingerprints | default([]) }}"
+        migrate_sshd_config: REVIEW_REQUIRED
+        authorized_key_fingerprints: "{{ audit_ssh.authorized_key_fingerprints | default([]) }}"
+        private_key_locations_metadata_only: "{{ audit_ssh.private_key_locations_metadata_only | default([]) }}"
+      repositories:
+        review_source: audit_host_os.commands.yum_repolist and rpm_gpg_pubkeys
+      services:
+        review_source: audit_runtime.commands and audit_runtime.service_schedule_files
+      dependencies:
+        review_source: audit_network.commands
+      approvals:
+        manifest_status: proposed
+        reviewer: REQUIRED
+      review_items:
+        - Confirm target RHEL 8 instance ID, private IP, IAM profile, and security groups after manual build.
+        - Review proposed root sync paths and replace proposed_root_sync_path_names with approved root_sync_paths records.
+        - Map RHEL 7 repositories and GPG fingerprints to approved RHEL 8 repositories.
+        - Decide whether any SSH authorized keys, client config, known hosts, or private keys require migration.
+        - Confirm DNS hosted zone, record, target value, and restore TTL.
+        - Confirm rollback RPO and owner approval reference.
+      hard_blockers: "{{ audit_context.hard_blockers | default([]) }}"
+
+- name: Add Btrfs hard blocker when detected
+  ansible.builtin.set_fact:
+    audit_proposed_manifest: >-
+      {{
+        audit_proposed_manifest | combine({
+          'hard_blockers': (audit_proposed_manifest.hard_blockers | default([])) + ['Btrfs detected; simple detach/attach migration requires a separate plan.']
+        }, recursive=True)
+      }}
+  when: >-
+    (audit_filesystem.commands | default([])
+      | selectattr('item.key', 'equalto', 'btrfs_mounts')
+      | map(attribute='stdout')
+      | join('')
+      | trim
+      | length) > 0

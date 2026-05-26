@@ -1,9 +1,124 @@
 ---
-- name: Teardown ephemeral rsync SSH channel
-  hosts: rhel8_targets
+- name: Load approved migration manifest for rsync channel teardown
+  hosts: localhost
+  gather_facts: true
+  tasks:
+    - name: Load approved manifest
+      ansible.builtin.import_tasks: tasks/load-approved-manifest.yml
+
+- name: Read RHEL 8 migration public keys before deletion
+  hosts: "{{ rhel8_target_group | default(rhel8_target_host | default('rhel8_targets')) }}"
   become: true
   gather_facts: false
+  vars:
+    migration_key_path: "/root/.ssh/migration_{{ migration_id }}"
   tasks:
-    - name: Not implemented - rsync SSH channel teardown
-      ansible.builtin.fail:
-        msg: "TODO: remove migration SSH keys, authorized-key entries, and temporary known-host entries."
+    - name: Record RHEL 8 target host list on localhost
+      ansible.builtin.set_fact:
+        migration_rhel8_target_hosts: "{{ ansible_play_hosts }}"
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+
+    - name: Stat migration public key
+      ansible.builtin.stat:
+        path: "{{ migration_key_path }}.pub"
+      register: migration_public_key_stat
+
+    - name: Read migration public key when present
+      ansible.builtin.slurp:
+        src: "{{ migration_key_path }}.pub"
+      register: migration_public_key_slurp
+      when: migration_public_key_stat.stat.exists
+
+    - name: Store migration public key for source teardown
+      ansible.builtin.set_fact:
+        migration_public_key: "{{ migration_public_key_slurp.content | b64decode | trim }}"
+      when: migration_public_key_stat.stat.exists
+
+- name: Remove RHEL 7 authorized key and forced-command allowlist
+  hosts: "{{ rhel7_source_group | default(rhel7_source_host | default('rhel7_sources')) }}"
+  become: true
+  gather_facts: false
+  vars:
+    migration_allowed_file: "/etc/migration-rsync/{{ migration_id }}.allowed"
+  tasks:
+    - name: Remove migration public keys from root authorized_keys when available
+      ansible.posix.authorized_key:
+        user: root
+        state: absent
+        key: "{{ hostvars[item].migration_public_key }}"
+      loop: "{{ hostvars['localhost'].migration_rhel8_target_hosts | default([]) }}"
+      when: hostvars[item].migration_public_key is defined
+
+    - name: Remove any remaining authorized_keys lines tagged with migration ID
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        regexp: "migration-{{ migration_id }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove migration rsync allowlist file
+      ansible.builtin.file:
+        path: "{{ migration_allowed_file }}"
+        state: absent
+
+    - name: Optionally remove forced-command wrapper
+      ansible.builtin.file:
+        path: /usr/local/sbin/migration-rsync-wrapper
+        state: absent
+      when: migration_remove_rsync_wrapper | default(false) | bool
+
+- name: Delete RHEL 8 migration key material and known-host block
+  hosts: "{{ rhel8_target_group | default(rhel8_target_host | default('rhel8_targets')) }}"
+  become: true
+  gather_facts: true
+  vars:
+    migration_key_path: "/root/.ssh/migration_{{ migration_id }}"
+    migration_source_ssh_host: "{{ rhel7_ssh_host | default(hostvars['localhost'].migration_manifest.source.private_ip | default(hostvars['localhost'].migration_manifest.source.hostname | default(''))) }}"
+  tasks:
+    - name: Remove RHEL 8 migration private and public keys
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ migration_key_path }}"
+        - "{{ migration_key_path }}.pub"
+
+    - name: Remove migration known_hosts block
+      ansible.builtin.blockinfile:
+        path: /root/.ssh/known_hosts
+        marker: "# {mark} ANSIBLE MANAGED MIGRATION {{ migration_id }} {{ migration_source_ssh_host }}"
+        block: ""
+        state: absent
+      failed_when: false
+
+    - name: Build rsync channel teardown report
+      ansible.builtin.set_fact:
+        migration_rsync_channel_teardown_report:
+          metadata:
+            migration_id: "{{ migration_id }}"
+            phase: phase-9-decommission
+            action: teardown-rsync-channel
+            target_host: "{{ inventory_hostname }}"
+            git_commit_sha: "{{ scm_revision | default('unknown') }}"
+            ansible_version: "{{ ansible_version.full | default('unknown') }}"
+            completed_at: "{{ ansible_date_time.iso8601 }}"
+            result: success
+          manifest_source: "{{ hostvars['localhost'].migration_manifest_source }}"
+          removed_key_path: "{{ migration_key_path }}"
+          removed_known_hosts_marker: "ANSIBLE MANAGED MIGRATION {{ migration_id }} {{ migration_source_ssh_host }}"
+
+    - name: Upload rsync channel teardown evidence to S3
+      amazon.aws.s3_object:
+        bucket: "{{ artifact_bucket | trim }}"
+        object: "{{ hostvars['localhost'].migration_artifact_prefix }}/phase-9-decommission/{{ hostvars['localhost'].migration_timestamp }}-rsync-channel-teardown-{{ inventory_hostname }}.yml"
+        content: "{{ migration_rsync_channel_teardown_report | to_nice_yaml(indent=2, sort_keys=false) }}"
+        mode: put
+        region: "{{ aws_region | trim }}"
+        encrypt: true
+        encryption_mode: "{{ 'aws:kms' if migration_artifact_kms_key_id is defined else omit }}"
+        encryption_kms_key_id: "{{ migration_artifact_kms_key_id | default(omit) }}"
+      delegate_to: localhost
+      become: false
+      when: migration_upload_to_s3 | default(true) | bool

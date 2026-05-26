@@ -1,9 +1,107 @@
 ---
-- name: Sync approved root-volume content
-  hosts: rhel8_targets
-  become: true
-  gather_facts: false
+- name: Load approved migration manifest for root sync
+  hosts: localhost
+  gather_facts: true
   tasks:
-    - name: Not implemented - root content rsync
-      ansible.builtin.fail:
-        msg: "TODO: implement manifest-approved root content rsync."
+    - name: Load approved manifest
+      ansible.builtin.import_tasks: tasks/load-approved-manifest.yml
+
+- name: Sync approved root-volume content
+  hosts: "{{ rhel8_target_group | default(rhel8_target_host | default('rhel8_targets')) }}"
+  become: true
+  gather_facts: true
+  vars:
+    migration_key_path: "/root/.ssh/migration_{{ migration_id }}"
+    migration_source_ssh_host: "{{ rhel7_ssh_host | default(hostvars['localhost'].migration_manifest.source.private_ip | default(hostvars['localhost'].migration_manifest.source.hostname | default(''))) }}"
+    migration_rsync_user: "{{ rsync_source_user | default('root') }}"
+  tasks:
+    - name: Stat migration private key on RHEL 8
+      ansible.builtin.stat:
+        path: "{{ migration_key_path }}"
+      register: migration_private_key_stat
+
+    - name: Validate rsync channel key exists
+      ansible.builtin.assert:
+        that:
+          - migration_private_key_stat.stat.exists
+          - migration_private_key_stat.stat.mode == '0600'
+        fail_msg: "Migration SSH key is missing or has unsafe permissions. Run setup-rsync-channel first."
+
+    - name: Run rsync for approved root sync paths
+      ansible.builtin.shell: |
+        set -o pipefail
+        src_path={{ item.path | quote }}
+        dest_path={{ item.path | quote }}
+        mkdir -p -- "$dest_path"
+
+        rsync_opts=(-aAXH --numeric-ids --one-file-system --itemize-changes --stats)
+        {% if item.delete_allowed | default(false) | bool %}
+        rsync_opts+=(--delete)
+        {% endif %}
+        {% for exclude in item.excludes | default([]) %}
+        rsync_opts+=(--exclude={{ exclude | quote }})
+        {% endfor %}
+        {% for extra_opt in migration_rsync_extra_opts | default([]) %}
+        rsync_opts+=({{ extra_opt | quote }})
+        {% endfor %}
+
+        ssh_cmd="ssh -i {{ migration_key_path }} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts"
+        {% if migration_ssh_proxyjump is defined %}
+        ssh_cmd="$ssh_cmd -o ProxyJump={{ migration_ssh_proxyjump | quote }}"
+        {% endif %}
+
+        source_spec="{{ migration_rsync_user }}@{{ migration_source_ssh_host }}:${src_path%/}/"
+        dest_spec="${dest_path%/}/"
+        rsync "${rsync_opts[@]}" -e "$ssh_cmd" "$source_spec" "$dest_spec"
+      args:
+        executable: /bin/bash
+      loop: "{{ hostvars['localhost'].migration_manifest.root_sync_paths | default([]) }}"
+      register: migration_rsync_results
+      changed_when: migration_rsync_results.rc == 0
+      failed_when: false
+
+    - name: Run restorecon for synced trees when requested
+      ansible.builtin.command:
+        cmd: "restorecon -Rv {{ item.path }}"
+      loop: "{{ hostvars['localhost'].migration_manifest.root_sync_paths | default([]) }}"
+      register: migration_restorecon_results
+      changed_when: false
+      failed_when: false
+      when: item.selinux.restorecon_after_sync | default(true) | bool
+
+    - name: Build root sync report
+      ansible.builtin.set_fact:
+        migration_rsync_report:
+          metadata:
+            migration_id: "{{ migration_id }}"
+            phase: phase-4-migrate
+            action: rsync-root-content
+            target_host: "{{ inventory_hostname }}"
+            git_commit_sha: "{{ scm_revision | default('unknown') }}"
+            ansible_version: "{{ ansible_version.full | default('unknown') }}"
+            completed_at: "{{ ansible_date_time.iso8601 }}"
+            result: "{{ 'success' if (migration_rsync_results.results | default([]) | selectattr('rc', 'ne', 0) | list | length) == 0 else 'failed' }}"
+          manifest_source: "{{ hostvars['localhost'].migration_manifest_source }}"
+          source_ssh_host: "{{ migration_source_ssh_host }}"
+          rsync_results: "{{ migration_rsync_results.results | default([]) }}"
+          restorecon_results: "{{ migration_restorecon_results.results | default([]) }}"
+
+    - name: Upload root sync report to S3
+      amazon.aws.s3_object:
+        bucket: "{{ artifact_bucket | trim }}"
+        object: "{{ hostvars['localhost'].migration_artifact_prefix }}/phase-4-migrate/rsync/{{ hostvars['localhost'].migration_timestamp }}-rsync-report-{{ inventory_hostname }}.yml"
+        content: "{{ migration_rsync_report | to_nice_yaml(indent=2, sort_keys=false) }}"
+        mode: put
+        region: "{{ aws_region | trim }}"
+        encrypt: true
+        encryption_mode: "{{ 'aws:kms' if migration_artifact_kms_key_id is defined else omit }}"
+        encryption_kms_key_id: "{{ migration_artifact_kms_key_id | default(omit) }}"
+      delegate_to: localhost
+      become: false
+      when: migration_upload_to_s3 | default(true) | bool
+
+    - name: Fail if any approved rsync path failed
+      ansible.builtin.assert:
+        that:
+          - migration_rsync_results.results | default([]) | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: "One or more approved root-content rsync operations failed."

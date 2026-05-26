@@ -1,9 +1,246 @@
 ---
-- name: Setup ephemeral rsync SSH channel
-  hosts: rhel8_targets
-  become: true
-  gather_facts: false
+- name: Load approved migration manifest for rsync channel setup
+  hosts: localhost
+  gather_facts: true
   tasks:
-    - name: Not implemented - rsync SSH channel setup
-      ansible.builtin.fail:
-        msg: "TODO: implement ephemeral SSH key setup and source host-key verification."
+    - name: Load approved manifest
+      ansible.builtin.import_tasks: tasks/load-approved-manifest.yml
+
+- name: Prepare RHEL 8 rsync client key and host trust
+  hosts: "{{ rhel8_target_group | default(rhel8_target_host | default('rhel8_targets')) }}"
+  become: true
+  gather_facts: true
+  vars:
+    migration_key_path: "/root/.ssh/migration_{{ migration_id }}"
+    migration_source_ssh_host: "{{ rhel7_ssh_host | default(hostvars['localhost'].migration_manifest.source.private_ip | default(hostvars['localhost'].migration_manifest.source.hostname | default(''))) }}"
+    migration_ssh_keyscan_types: "{{ rsync_keyscan_types | default('ed25519') }}"
+  tasks:
+    - name: Record RHEL 8 target host list on localhost
+      ansible.builtin.set_fact:
+        migration_rhel8_target_hosts: "{{ ansible_play_hosts }}"
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+
+    - name: Ensure root SSH directory exists on RHEL 8
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Generate per-migration ed25519 keypair on RHEL 8
+      ansible.builtin.command:
+        cmd: "ssh-keygen -t ed25519 -N '' -C migration-{{ migration_id }} -f {{ migration_key_path }}"
+        creates: "{{ migration_key_path }}"
+      register: migration_keygen
+
+    - name: Enforce private key permissions
+      ansible.builtin.file:
+        path: "{{ migration_key_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Read RHEL 8 migration public key
+      ansible.builtin.slurp:
+        src: "{{ migration_key_path }}.pub"
+      register: migration_public_key_slurp
+
+    - name: Store RHEL 8 migration public key
+      ansible.builtin.set_fact:
+        migration_public_key: "{{ migration_public_key_slurp.content | b64decode | trim }}"
+
+    - name: Scan RHEL 7 SSH host key from RHEL 8
+      ansible.builtin.command:
+        cmd: "ssh-keyscan -T 10 -t {{ migration_ssh_keyscan_types }} {{ migration_source_ssh_host }}"
+      register: migration_source_keyscan
+      changed_when: false
+
+    - name: Fingerprint scanned RHEL 7 SSH host key
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n' {{ migration_source_keyscan.stdout | quote }} | ssh-keygen -lf -
+      args:
+        executable: /bin/bash
+      register: migration_source_keyscan_fingerprints
+      changed_when: false
+
+    - name: Compare scanned SSH host key to manifest fingerprints
+      ansible.builtin.assert:
+        that:
+          - migration_scanned_fingerprint_tokens | length > 0
+          - migration_expected_fingerprint_tokens | length > 0
+          - migration_scanned_fingerprint_tokens | difference(migration_expected_fingerprint_tokens) | length == 0
+        fail_msg: "RHEL 7 SSH host key fingerprint does not match approved manifest."
+      vars:
+        migration_scanned_fingerprint_tokens: "{{ migration_source_keyscan_fingerprints.stdout | regex_findall('SHA256:[A-Za-z0-9+/=]+') | unique }}"
+        migration_expected_fingerprint_tokens: "{{ (hostvars['localhost'].migration_manifest.ssh.source_host_key_fingerprints | default([]) | to_json) | regex_findall('SHA256:[A-Za-z0-9+/=]+') | unique }}"
+      when: migration_require_host_key_match | default(true) | bool
+
+    - name: Install RHEL 7 SSH host key block in known_hosts
+      ansible.builtin.blockinfile:
+        path: /root/.ssh/known_hosts
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        marker: "# {mark} ANSIBLE MANAGED MIGRATION {{ migration_id }} {{ migration_source_ssh_host }}"
+        block: "{{ migration_source_keyscan.stdout }}"
+
+- name: Authorize RHEL 8 migration keys on RHEL 7
+  hosts: "{{ rhel7_source_group | default(rhel7_source_host | default('rhel7_sources')) }}"
+  become: true
+  gather_facts: true
+  vars:
+    migration_allowed_file: "/etc/migration-rsync/{{ migration_id }}.allowed"
+    migration_wrapper_path: /usr/local/sbin/migration-rsync-wrapper
+  tasks:
+    - name: Ensure migration rsync config directory exists on RHEL 7
+      ansible.builtin.file:
+        path: /etc/migration-rsync
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install allowed source path file on RHEL 7
+      ansible.builtin.copy:
+        dest: "{{ migration_allowed_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          {% for sync_path in hostvars['localhost'].migration_manifest.root_sync_paths | default([]) %}
+          {{ sync_path.path }}
+          {% endfor %}
+
+    - name: Install forced-command rsync wrapper on RHEL 7
+      ansible.builtin.copy:
+        dest: "{{ migration_wrapper_path }}"
+        owner: root
+        group: root
+        mode: "0750"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          migration_id="${1:-}"
+          allowed_file="/etc/migration-rsync/${migration_id}.allowed"
+
+          if [ -z "$migration_id" ] || [ ! -r "$allowed_file" ]; then
+            echo "migration rsync wrapper denied: missing migration allowlist" >&2
+            exit 126
+          fi
+
+          original_command="${SSH_ORIGINAL_COMMAND:-}"
+          if [[ ! "$original_command" =~ ^rsync[[:space:]]+--server[[:space:]]+--sender[[:space:]][A-Za-z0-9._@%/+=:,\ -]+$ ]]; then
+            echo "migration rsync wrapper denied: unsupported command" >&2
+            exit 126
+          fi
+
+          requested_path="${original_command##* }"
+          requested_realpath="$(readlink -m -- "$requested_path")"
+          allowed=0
+          while IFS= read -r allowed_path; do
+            [ -n "$allowed_path" ] || continue
+            allowed_realpath="$(readlink -m -- "$allowed_path")"
+            case "$requested_realpath/" in
+              "$allowed_realpath"/|"$allowed_realpath"/*) allowed=1 ;;
+            esac
+          done < "$allowed_file"
+
+          if [ "$allowed" -ne 1 ]; then
+            echo "migration rsync wrapper denied: path not allowed" >&2
+            exit 126
+          fi
+
+          exec /bin/bash -c "$original_command"
+
+    - name: Build authorized key source restrictions
+      ansible.builtin.set_fact:
+        migration_authorized_key_sources: >-
+          {{
+            hostvars['localhost'].migration_rhel8_target_hosts
+            | map('extract', hostvars, ['ansible_default_ipv4', 'address'])
+            | select('defined')
+            | list
+          }}
+
+    - name: Validate RHEL 8 source IPs for SSH key restriction
+      ansible.builtin.assert:
+        that:
+          - migration_authorized_key_sources | length > 0
+        fail_msg: "Could not determine RHEL 8 source IPs for authorized_keys from= restriction."
+
+    - name: Authorize migration public keys on RHEL 7 root account
+      ansible.posix.authorized_key:
+        user: root
+        state: present
+        key: "{{ hostvars[item].migration_public_key }}"
+        manage_dir: true
+        comment: "migration-{{ migration_id }}"
+        key_options: "from=\"{{ migration_authorized_key_sources | join(',') }}\",command=\"{{ migration_wrapper_path }} {{ migration_id }}\",restrict,no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding"
+      loop: "{{ hostvars['localhost'].migration_rhel8_target_hosts }}"
+
+- name: Test rsync SSH channel and upload setup evidence
+  hosts: "{{ rhel8_target_group | default(rhel8_target_host | default('rhel8_targets')) }}"
+  become: true
+  gather_facts: true
+  vars:
+    migration_key_path: "/root/.ssh/migration_{{ migration_id }}"
+    migration_source_ssh_host: "{{ rhel7_ssh_host | default(hostvars['localhost'].migration_manifest.source.private_ip | default(hostvars['localhost'].migration_manifest.source.hostname | default(''))) }}"
+    migration_rsync_user: "{{ rsync_source_user | default('root') }}"
+    migration_proxyjump_arg: "{{ '-o ProxyJump=' ~ migration_ssh_proxyjump if migration_ssh_proxyjump is defined else '' }}"
+  tasks:
+    - name: Test RHEL 8 to RHEL 7 SSH channel
+      ansible.builtin.command:
+        cmd: >-
+          ssh -i {{ migration_key_path }} -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/root/.ssh/known_hosts {{ migration_proxyjump_arg }}
+          {{ migration_rsync_user }}@{{ migration_source_ssh_host }} true
+      register: migration_ssh_channel_test
+      changed_when: false
+      failed_when: false
+
+    - name: Build rsync channel setup report
+      ansible.builtin.set_fact:
+        migration_rsync_channel_setup_report:
+          metadata:
+            migration_id: "{{ migration_id }}"
+            phase: phase-4-migrate
+            action: setup-rsync-channel
+            target_host: "{{ inventory_hostname }}"
+            git_commit_sha: "{{ scm_revision | default('unknown') }}"
+            ansible_version: "{{ ansible_version.full | default('unknown') }}"
+            completed_at: "{{ ansible_date_time.iso8601 }}"
+            result: "{{ 'success' if migration_ssh_channel_test.rc == 0 else 'failed' }}"
+          manifest_source: "{{ hostvars['localhost'].migration_manifest_source }}"
+          key_path: "{{ migration_key_path }}"
+          public_key_fingerprint: "{{ migration_public_key | regex_findall('SHA256:[A-Za-z0-9+/=]+') | default([]) }}"
+          source_ssh_host: "{{ migration_source_ssh_host }}"
+          channel_test:
+            rc: "{{ migration_ssh_channel_test.rc }}"
+            stdout: "{{ migration_ssh_channel_test.stdout | default('') }}"
+            stderr: "{{ migration_ssh_channel_test.stderr | default('') }}"
+
+    - name: Upload rsync channel setup evidence to S3
+      amazon.aws.s3_object:
+        bucket: "{{ artifact_bucket | trim }}"
+        object: "{{ hostvars['localhost'].migration_artifact_prefix }}/phase-4-migrate/{{ hostvars['localhost'].migration_timestamp }}-rsync-channel-setup-{{ inventory_hostname }}.yml"
+        content: "{{ migration_rsync_channel_setup_report | to_nice_yaml(indent=2, sort_keys=false) }}"
+        mode: put
+        region: "{{ aws_region | trim }}"
+        encrypt: true
+        encryption_mode: "{{ 'aws:kms' if migration_artifact_kms_key_id is defined else omit }}"
+        encryption_kms_key_id: "{{ migration_artifact_kms_key_id | default(omit) }}"
+      delegate_to: localhost
+      become: false
+      when: migration_upload_to_s3 | default(true) | bool
+
+    - name: Fail if rsync SSH channel test failed
+      ansible.builtin.assert:
+        that:
+          - migration_ssh_channel_test.rc == 0
+        fail_msg: "RHEL 8 to RHEL 7 migration SSH channel test failed."

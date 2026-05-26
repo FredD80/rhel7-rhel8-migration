@@ -33,6 +33,10 @@
       - secondary_ip
 
   pre_tasks:
+    - name: Set audit timestamp
+      ansible.builtin.set_fact:
+        audit_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
     - name: Normalize requested cutover strategies
       ansible.builtin.set_fact:
         requested_cutover_strategies: >-
@@ -75,6 +79,10 @@
           s3_base_prefix: "rhel-migration/{{ migration_id | trim }}"
           sanitized_audit_key: "rhel-migration/{{ migration_id | trim }}/phase-2-audit/sanitized"
           proposed_manifest_key: "rhel-migration/{{ migration_id | trim }}/manifest/proposed"
+          timestamp: "{{ audit_timestamp }}"
+          capture_failures: []
+          review_items: []
+          hard_blockers: []
 
     - name: Show audit artifact destination
       ansible.builtin.debug:
