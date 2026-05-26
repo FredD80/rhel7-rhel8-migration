@@ -3,29 +3,8 @@
   hosts: "{{ rhel7_source_host }}"
   become: true
   gather_facts: true
-  vars_prompt:
-    - name: migration_id
-      prompt: "Migration ID"
-      private: false
-
-    - name: rhel7_source_host
-      prompt: "RHEL 7 source inventory host or group"
-      private: false
-
-    - name: artifact_bucket
-      prompt: "S3 artifact bucket name"
-      private: false
-
-    - name: aws_region
-      prompt: "AWS region"
-      private: false
-
-    - name: cutover_strategies
-      prompt: "Requested cutover strategies (comma-separated: dns,eip,lb,secondary_ip)"
-      private: false
-      default: "dns"
-
   vars:
+    default_cutover_strategies: dns
     allowed_cutover_strategies:
       - dns
       - eip
@@ -41,7 +20,7 @@
       ansible.builtin.set_fact:
         requested_cutover_strategies: >-
           {{
-            (['dns'] + (cutover_strategies | trim | lower | regex_replace('\\s+', '')).split(','))
+            (['dns'] + (cutover_strategies | default(default_cutover_strategies) | trim | lower | regex_replace('\\s+', '')).split(','))
             | reject('equalto', '')
             | unique
             | list
@@ -54,7 +33,6 @@
           - rhel7_source_host is defined
           - artifact_bucket is defined
           - aws_region is defined
-          - cutover_strategies is defined
           - migration_id | trim | length > 0
           - rhel7_source_host | trim | length > 0
           - artifact_bucket | trim | length > 0

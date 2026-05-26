@@ -8,7 +8,7 @@ playbooks/audit/discover-migration-manifest.yml
 
 ## Mandatory Inputs
 
-Configure these as required AAP survey variables or provide them as CLI extra vars.
+Configure these as AAP Job Template survey variables or provide them as CLI extra vars. The playbook does not use `vars_prompt`; AAP surveys are the supported input path.
 
 | Variable | Purpose | Example |
 |---|---|---|
@@ -17,6 +17,17 @@ Configure these as required AAP survey variables or provide them as CLI extra va
 | `artifact_bucket` | S3 bucket for audit and manifest artifacts | `my-migration-artifacts` |
 | `aws_region` | AWS region for S3 and AWS metadata capture | `us-east-1` |
 | `cutover_strategies` | Requested production identity transfer strategies, comma-separated | `dns` |
+
+Recommended AAP survey configuration:
+
+| Question | Variable | Type | Required | Default |
+|---|---|---|---|---|
+| Migration ID | `migration_id` | Text | Yes | none |
+| RHEL 7 source host/group | `rhel7_source_host` | Text | Yes | none |
+| S3 artifact bucket | `artifact_bucket` | Text | Yes | none |
+| AWS region | `aws_region` | Text | Yes | none |
+| Cutover strategies | `cutover_strategies` | Multiple choice or text | Yes | `dns` |
+| Upload to S3 | `audit_upload_to_s3` | Boolean | No | `true` |
 
 Allowed `cutover_strategies` values:
 
